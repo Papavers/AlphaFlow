@@ -3,6 +3,7 @@ import random
 from typing import Tuple
 
 from rdagent.app.qlib_rd_loop.conf import QUANT_PROP_SETTING
+from rdagent.app.qlib_rd_loop.user_prompt import build_user_requirement_block
 from rdagent.components.proposal import FactorAndModelHypothesisGen
 from rdagent.core.proposal import Hypothesis, Scenario, Trace
 from rdagent.oai.llm_utils import APIBackend
@@ -161,7 +162,8 @@ class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
                 T("scenarios.qlib.prompts:factor_hypothesis_specification").r()
                 if action == "factor"
                 else T("scenarios.qlib.prompts:model_hypothesis_specification").r()
-            ),
+            )
+            + build_user_requirement_block(),
         }
         return context_dict, True
 

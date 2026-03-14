@@ -104,50 +104,26 @@ qlib_factor_simulator: |-
   4. evaluate the portfolio's performance including the return, sharpe ratio, max drawdown, and so on.
 
 qlib_factor_rich_style_description : |-
-  ### R&D Agent-Qlib: Automated Quantitative Trading & Iterative Factors Evolution Demo
+  ### CSI_Agent: 因子挖掘与迭代演化
 
-  #### [Overview](#_summary)
+  #### [概览](#_summary)
 
-  The demo showcases the iterative process of hypothesis generation, knowledge construction, and decision-making. It highlights how financial factors evolve through continuous feedback and refinement.
+  CSI_Agent 将自动进行假设生成、代码实现与回测验证的闭环迭代。
 
-  #### [Automated R&D](#_rdloops)
+  #### [目标](#_summary)
 
-  - **[R (Research)](#_research)**
-    - Iterative development of ideas and hypotheses.
-    - Continuous learning and knowledge construction.
-
-  - **[D (Development)](#_development)**
-    - Progressive implementation and code generation of factors.
-    - Automated testing and validation of financial factors.
-
-  #### [Objective](#_summary)
-
-  To demonstrate the dynamic evolution of financial factors through the Qlib platform, emphasizing how each iteration enhances the accuracy and reliability of the resulting financial factors.
+  通过自动化迭代，持续挖掘并优化具有超额收益的金融因子。
 
 qlib_factor_from_report_rich_style_description : |-
-  ### R&D Agent-Qlib: Automated Quantitative Trading & Factor Extraction from Financial Reports Demo
+  ### CSI_Agent: 基于研报的因子挖掘
 
-  #### [Overview](#_summary)
+  #### [概览](#_summary)
 
-  This demo showcases the process of extracting factors from financial research reports, implementing these factors, and analyzing their performance through Qlib backtest, continually expanding and refining the factor library.
+  CSI_Agent 自动进行量化金融模型的假设生成、结构优化与回测验证。
 
-  #### [Automated R&D](#_rdloops)
+  #### [目标](#_summary)
 
-  - **[R (Research)](#_research)**
-    - Iterative development of ideas and hypotheses from financial reports.
-    - Continuous learning and knowledge construction.
-
-  - **[D (Development)](#_development)**
-    - Progressive factor extraction and code generation.
-    - Automated implementation and testing of financial factors.
-
-  #### [Objective](#_summary)
-
-  <table border="1" style="width:100%; border-collapse: collapse;">
-    <tr>
-      <td>💡 <strong>Innovation </strong></td>
-      <td>Tool to quickly extract and test factors from research reports.</td>
-    </tr>
+  快速提取并验证研报中的有效因子。
     <tr>
       <td>⚡ <strong>Efficiency </strong></td>
       <td>Rapid identification of valuable factors from numerous reports.</td>
@@ -233,26 +209,15 @@ qlib_model_simulator: |-
   5. Iterate on growing the hypothesis to enable model improvements based on performance evaluations and feedback.
 
 qlib_model_rich_style_description: |-
-  ### Qlib Model Evolving Automatic R&D Demo
+  ### CSI_Agent: 模型迭代演化
   
-  #### [Overview](#_summary)
+  #### [概览](#_summary)
   
-  The demo showcases the iterative process of hypothesis generation, knowledge construction, and decision-making in model construction in quantitative finance. It highlights how models evolve through continuous feedback and refinement.
+  CSI_Agent 自动进行量化金融模型的假设生成、结构优化与回测验证。
   
-  #### [Automated R&D](#_rdloops)
+  #### [目标](#_summary)
   
-  - **[R (Research)](#_research)**
-    - Iteration of ideas and hypotheses.
-    - Continuous learning and knowledge construction.
-  
-  - **[D (Development)](#_development)**
-    - Evolving code generation and model refinement.
-    - Automated implementation and testing of models.
-  
-  #### [Objective](#_summary)
-  
-  To demonstrate the dynamic evolution of models through the Qlib platform, emphasizing how each iteration enhances the accuracy and reliability of the resulting models. 
-
+  通过持续的反馈与自我改进，构建更准确、鲁棒的预测模型。
 qlib_model_experiment_setting: |-
   | Dataset 📊 | Model 🤖    | Factors 🌟       | Data Split  🧮                                   |
   |---------|----------|---------------|-------------------------------------------------|

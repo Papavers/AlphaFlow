@@ -73,6 +73,13 @@ class LiteLLMAPIBackend(APIBackend):
         Call the embedding function
         """
         model_name = LITELLM_SETTINGS.embedding_model
+        
+        # Fast path: if model is "local-only-embedding", use local sentence-transformers directly
+        if model_name == "local-only-embedding":
+            logger.info(f"{LogColors.GREEN}Using local-only embedding model{LogColors.END}", tag="debug_litellm_emb")
+            from rdagent.oai.embedding_fallback import create_embedding as local_create_embedding
+            return local_create_embedding(input_content_list)
+        
         logger.info(f"{LogColors.GREEN}Using emb model{LogColors.END} {model_name}", tag="debug_litellm_emb")
         if LITELLM_SETTINGS.log_llm_chat_content:
             logger.info(

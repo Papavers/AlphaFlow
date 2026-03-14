@@ -7,6 +7,7 @@ import fire
 
 from rdagent.app.qlib_rd_loop.conf import FACTOR_FROM_REPORT_PROP_SETTING
 from rdagent.app.qlib_rd_loop.factor import FactorRDLoop
+from rdagent.app.qlib_rd_loop.user_prompt import build_user_requirement_block
 from rdagent.components.document_reader.document_reader import (
     extract_first_page_screenshot_from_pdf,
     load_and_process_pdfs_by_langchain,
@@ -37,7 +38,7 @@ def generate_hypothesis(factor_result: dict, report_content: str) -> str:
     system_prompt = T(".prompts:hypothesis_generation.system").r()
     user_prompt = T(".prompts:hypothesis_generation.user").r(
         factor_descriptions=json.dumps(factor_result), report_content=report_content
-    )
+    ) + build_user_requirement_block("User Screening Preference")
 
     response = APIBackend().build_messages_and_create_chat_completion(
         user_prompt=user_prompt,

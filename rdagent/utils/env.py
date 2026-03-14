@@ -775,7 +775,13 @@ class DockerEnv(Env[DockerConf]):
         """
         Download image if it doesn't exist
         """
-        client = docker.from_env()
+        import os
+        # Support DOCKER_HOST environment variable (useful for macOS Docker Desktop)
+        docker_host = os.getenv('DOCKER_HOST')
+        if docker_host:
+            client = docker.DockerClient(base_url=docker_host)
+        else:
+            client = docker.from_env()
         if (
             self.conf.build_from_dockerfile
             and self.conf.dockerfile_folder_path is not None

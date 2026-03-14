@@ -195,6 +195,18 @@ class FactorFBWorkspace(FBWorkspace):
             if workspace_output_file_path.exists() and execution_success:
                 try:
                     executed_factor_value_dataframe = pd.read_hdf(workspace_output_file_path)
+                    
+                    # Auto-fix: Ensure index order is ['datetime', 'instrument']
+                    if isinstance(executed_factor_value_dataframe.index, pd.MultiIndex):
+                        current_levels = list(executed_factor_value_dataframe.index.names)
+                        if current_levels == ['instrument', 'datetime']:
+                            # Reorder to ['datetime', 'instrument']
+                            executed_factor_value_dataframe = executed_factor_value_dataframe.reorder_levels(['datetime', 'instrument']).sort_index()
+                        elif current_levels != ['datetime', 'instrument']:
+                            # If index order is unexpected, attempt to reorder if both levels exist
+                            if 'datetime' in current_levels and 'instrument' in current_levels:
+                                executed_factor_value_dataframe = executed_factor_value_dataframe.reorder_levels(['datetime', 'instrument']).sort_index()
+                    
                     execution_feedback += self.FB_OUTPUT_FILE_FOUND
                 except Exception as e:
                     execution_feedback += f"Error found when reading hdf file: {e}"[:1000]

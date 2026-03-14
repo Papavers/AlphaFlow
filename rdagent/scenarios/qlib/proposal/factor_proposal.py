@@ -1,6 +1,7 @@
 import json
 from typing import List, Tuple
 
+from rdagent.app.qlib_rd_loop.user_prompt import build_user_requirement_block
 from rdagent.components.coder.factor_coder.factor import FactorExperiment, FactorTask
 from rdagent.components.proposal import FactorHypothesis2Experiment, FactorHypothesisGen
 from rdagent.core.proposal import Hypothesis, Scenario, Trace
@@ -41,7 +42,8 @@ class QlibFactorHypothesisGen(FactorHypothesisGen):
                 else "Now, you need to try factors that can achieve high IC (e.g., machine learning-based factors)."
             ),
             "hypothesis_output_format": T("scenarios.qlib.prompts:factor_hypothesis_output_format").r(),
-            "hypothesis_specification": T("scenarios.qlib.prompts:factor_hypothesis_specification").r(),
+            "hypothesis_specification": T("scenarios.qlib.prompts:factor_hypothesis_specification").r()
+            + build_user_requirement_block(),
         }
         return context_dict, True
 

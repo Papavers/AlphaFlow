@@ -429,15 +429,28 @@ class APIBackend(ABC):
 
     def create_embedding(self, input_content: str | list[str], *args, **kwargs) -> list[float] | list[list[float]]:  # type: ignore[no-untyped-def]
         input_content_list = [input_content] if isinstance(input_content, str) else input_content
-        resp = self._try_create_chat_completion_or_embedding(  # type: ignore[misc]
-            input_content_list=input_content_list,
-            embedding=True,
-            *args,
-            **kwargs,
-        )
-        if isinstance(input_content, str):
-            return resp[0]  # type: ignore[return-value]
-        return resp  # type: ignore[return-value]
+        try:
+            resp = self._try_create_chat_completion_or_embedding(  # type: ignore[misc]
+                input_content_list=input_content_list,
+                embedding=True,
+                *args,
+                **kwargs,
+            )
+            if isinstance(input_content, str):
+                return resp[0]  # type: ignore[return-value]
+            return resp  # type: ignore[return-value]
+        except Exception as e:
+            # Fallback to local sentence-transformers if embedding service fails (any error type)
+            logger.warning(f"Embedding service failed ({type(e).__name__}: {e}), falling back to local sentence-transformers")
+            try:
+                from rdagent.oai.embedding_fallback import create_embedding as local_create_embedding
+                resp = local_create_embedding(input_content_list)
+                if isinstance(input_content, str):
+                    return resp[0]  # type: ignore[return-value]
+                return resp  # type: ignore[return-value]
+            except Exception as fallback_err:
+                logger.error(f"Fallback embedding also failed: {fallback_err}")
+                raise
 
     def build_messages_and_calculate_token(
         self,
@@ -468,6 +481,21 @@ class APIBackend(ABC):
         timeout_count = 0
         violation_count = 0
         embedding_truncated = False  # Track if we've already tried truncation
+        
+        # Special case: if embedding and model is invalid, try local fallback immediately
+        if embedding and hasattr(LLM_SETTINGS, 'embedding_model'):
+            model_name = LLM_SETTINGS.embedding_model
+            if model_name in ['local-only-embedding', 'invalid', 'none']:
+                logger.info(f"Embedding model set to '{model_name}', using local fallback immediately")
+                try:
+                    from rdagent.oai.embedding_fallback import create_embedding as local_create_embedding
+                    input_content_list = kwargs.get('input_content_list', [])
+                    resp = local_create_embedding(input_content_list)
+                    return resp
+                except Exception as fallback_err:
+                    logger.error(f"Local embedding fallback failed: {fallback_err}")
+                    raise
+        
         for i in range(max_retry):
             API_start_time = datetime.now()
             try:

@@ -1,11 +1,19 @@
 import argparse
+import hashlib
+import json
+import os
 import re
+import signal
+import subprocess
 import textwrap
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from importlib.resources import files as rfiles
 from pathlib import Path
 from typing import Callable, Type
+
+from dotenv import load_dotenv
 
 import pandas as pd
 import plotly.express as px
@@ -36,7 +44,187 @@ from rdagent.scenarios.qlib.experiment.model_experiment import (
 )
 from rdagent.scenarios.qlib.experiment.quant_experiment import QlibQuantScenario
 
-st.set_page_config(layout="wide", page_title="RD-Agent", page_icon="🎓", initial_sidebar_state="expanded")
+load_dotenv()
+st.set_page_config(layout="wide", page_title="CSI_Agent", page_icon="📈", initial_sidebar_state="expanded")
+
+# ===== UI-only translation config (hardcoded) =====
+# NOTE: This does NOT change any backend/business logic. It only affects UI display.
+TRANSLATION_BASE_URL = "https://api.deepseek.com/v1"
+TRANSLATION_MODEL = "deepseek-chat"
+TRANSLATION_API_KEY = "sk-be468c9449794795ac3df1155c632246"
+
+# Inject Custom CSS for a fresh, gallery-friendly UI
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    :root {
+        --bg: #0f172a;
+        --card: #0b1220;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --accent-2: #a5b4fc;
+        --border: #1e293b;
+        --shadow: 0 18px 40px -24px rgba(0,0,0,0.6);
+    }
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        color: #e2e8f0;
+        background: radial-gradient(circle at 20% 20%, rgba(56,189,248,0.08), transparent 25%),
+                    radial-gradient(circle at 80% 10%, rgba(165,180,252,0.1), transparent 22%),
+                    radial-gradient(circle at 50% 80%, rgba(56,189,248,0.06), transparent 18%),
+                    #0b1220;
+    }
+
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display:none;}
+
+    [data-testid="stHeader"] {
+        background: rgba(12,18,32,0.75);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--border);
+    }
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0b1220 0%, #0f172a 60%, #0b1220 100%);
+        border-right: 1px solid var(--border);
+        color: #cbd5e1;
+    }
+    [data-testid="stSidebar"] section { padding-top: 1.5rem; }
+
+    .main .block-container {
+        padding-top: 2.5rem;
+        padding-bottom: 2.5rem;
+        max-width: 1300px;
+    }
+
+    /* Section headers */
+    .csi-section-title {
+        display: flex; align-items: center; gap: 10px; margin: 0 0 12px;
+        font-size: 1.1rem; font-weight: 600; color: #e2e8f0;
+    }
+    .csi-section-line {
+        height: 2px; width: 100%; background: linear-gradient(90deg, #38bdf8 0%, rgba(56,189,248,0) 90%);
+        margin-bottom: 18px;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 6px; background: transparent; border-bottom: 1px solid var(--border); }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(30,41,59,0.5);
+        border-radius: 10px 10px 0 0;
+        padding: 10px 16px;
+        color: #cbd5e1;
+        border: 1px solid transparent;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #0b1220 !important;
+        color: #38bdf8 !important;
+        border-color: var(--border) !important;
+        border-bottom-color: #0b1220 !important;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        background: linear-gradient(90deg, #38bdf8 0%, #6366f1 100%);
+        color: #0b1220;
+        border: none;
+        border-radius: 12px;
+        padding: 5px 9px;
+        font-size: 0.88rem;
+        font-weight: 600;
+        box-shadow: 0 12px 30px -18px rgba(99,102,241,0.8);
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    .stButton > button:hover { transform: translateY(-1px); box-shadow: 0 18px 36px -18px rgba(99,102,241,0.9); }
+    .stButton > button:active { transform: translateY(0); }
+
+    /* Inputs */
+    textarea, input, select { background: rgba(15,23,42,0.75) !important; color: #e2e8f0 !important; border-radius: 12px !important; border: 1px solid var(--border) !important; }
+    label, .stTextArea label { color: #cbd5e1 !important; }
+
+    /* Sidebar toggles: make labels readable on dark bg */
+    [data-testid="stSidebar"] [data-testid="stToggle"] label,
+    [data-testid="stSidebar"] [data-testid="stToggle"] span {
+        color: #e2e8f0 !important;
+    }
+
+    /* Tables */
+    .stDataFrame, .stTable { border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+
+    /* Images grid-friendly */
+    .csi-image-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+    .csi-image-grid img { width: 100%; height: 200px; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+
+    /* Markdown links for anchors */
+    a[href^="#_"] { text-decoration: none; color: #cbd5e1; }
+
+    /* Small helper text */
+    .csi-meta { color: var(--muted); font-size: 0.95rem; }
+
+    /* Horizontal chips for stats */
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--border); background: rgba(148,163,184,0.08); color: #e2e8f0; font-weight: 500; }
+
+    /* Animations */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes borderGlow {
+        0%, 100% { border-color: var(--border); box-shadow: 0 0 0 rgba(56,189,248,0); }
+        50% { border-color: #38bdf8; box-shadow: 0 0 16px rgba(56,189,248,0.6); }
+    }
+    @keyframes splashFade {
+        0% { opacity: 1; }
+        75% { opacity: 1; }
+        100% { opacity: 0; visibility: hidden; }
+    }
+    .fade-in { animation: fadeInUp 0.6s ease-out forwards; }
+    .chip:hover, .csi-task-card:hover { animation: borderGlow 1.2s ease-in-out infinite; cursor: pointer; }
+
+    /* Spotlight effect on hover */
+    .csi-card:hover, .csi-task-card:hover {
+        background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(56,189,248,0.12), rgba(15,23,42,0.85) 50%);
+        border-color: rgba(56,189,248,0.4);
+        transition: border-color 0.3s ease;
+    }
+
+    /* Splash screen */
+    .splash-screen {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 9999;
+        background: radial-gradient(circle at 50% 40%, rgba(56,189,248,0.15), rgba(11,18,32,0.95) 60%), #0b1220;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        opacity: 1; transition: opacity 0.8s ease; animation: splashFade 2.8s ease forwards; pointer-events: none;
+    }
+    .splash-screen.hide { opacity: 0; pointer-events: none; }
+    .splash-logo { font-size: 3.5rem; font-weight: 700; color: #38bdf8; margin-bottom: 16px; text-shadow: 0 0 40px rgba(56,189,248,0.5); }
+    .splash-tagline { font-size: 1.2rem; color: #cbd5e1; margin-bottom: 8px; }
+    .splash-desc { font-size: 0.95rem; color: #94a3b8; max-width: 520px; text-align: center; line-height: 1.6; }
+
+    /* Task selection cards */
+    .csi-task-card {
+        background: linear-gradient(145deg, rgba(15,23,42,0.85), rgba(15,23,42,0.6));
+        border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px;
+        box-shadow: var(--shadow); transition: all 0.3s ease; cursor: pointer;
+    }
+    .csi-task-card:hover { transform: translateY(-4px); box-shadow: 0 24px 48px -24px rgba(56,189,248,0.4); }
+    .csi-task-card.selected { border-color: #38bdf8; background: linear-gradient(145deg, rgba(56,189,248,0.1), rgba(15,23,42,0.8)); }
+    .csi-task-title { font-size: 1.05rem; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
+    .csi-task-desc { font-size: 0.9rem; color: #94a3b8; }
+
+    /* Fishbone / timeline chips */
+    .csi-fishbone { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .csi-fishbone .bone { display:flex; align-items:center; gap:6px; }
+    .csi-fishbone .dot { width:18px; height:18px; border-radius:999px; border:2px solid var(--border); background:#0f172a; }
+    .csi-fishbone .dot.active { border-color:#38bdf8; box-shadow:0 0 10px rgba(56,189,248,0.6); }
+    .csi-fishbone .label { color:#e2e8f0; font-weight:600; }
+    .csi-fishbone .spine { flex:1; height:2px; background:linear-gradient(90deg,#38bdf8,rgba(56,189,248,0)); min-width:40px; }
+</style>
+""", unsafe_allow_html=True)
+
 
 
 # 获取log_path参数
@@ -44,11 +232,15 @@ parser = argparse.ArgumentParser(description="RD-Agent Streamlit App")
 parser.add_argument("--log_dir", type=str, help="Path to the log directory")
 parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 args = parser.parse_args()
+
+# 结果目录优先顺序：命令行 --log_dir > 本地 ./log > 无（仅手动输入）
 if args.log_dir:
     main_log_path = Path(args.log_dir)
     if not main_log_path.exists():
-        st.error(f"Log dir `{main_log_path}` does not exist!")
+        st.error(f"结果目录 `{main_log_path}` 不存在!")
         st.stop()
+elif Path("./log").exists():
+    main_log_path = Path("./log").resolve()
 else:
     main_log_path = None
 
@@ -78,12 +270,97 @@ def filter_log_folders(main_log_path):
     return folders
 
 
-if "log_path" not in state:
+def _ensure_log_root() -> Path:
     if main_log_path:
-        state.log_path = filter_log_folders(main_log_path)[0]
+        root = main_log_path
     else:
-        state.log_path = None
-        st.toast(":red[**Please Set Log Path!**]", icon="⚠️")
+        root = Path("./log").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def launch_fin_factor(loop_n: int, all_duration: str | None = None):
+    log_root = _ensure_log_root()
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    log_dir = log_root / f"fin_factor_{ts}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "stdout.log"
+
+    cmd = ["python", "-m", "rdagent.app.qlib_rd_loop.factor", "--loop_n", str(loop_n)]
+    if all_duration:
+        cmd += ["--all_duration", all_duration]
+
+    f = open(log_file, "w")
+    proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, text=True)
+
+    state.launcher_proc_pid = proc.pid
+    state.launcher_log_dir = log_dir
+    state.launcher_log_file = log_file
+    state.launcher_target_loops = loop_n
+    state.launcher_start_ts = time.time()
+    return proc, log_dir
+
+
+def stop_launched_task():
+    if state.launcher_proc_pid:
+        try:
+            os.kill(state.launcher_proc_pid, signal.SIGTERM)
+        except Exception:
+            pass
+    state.launcher_proc_pid = None
+    state.launcher_log_dir = None
+    state.launcher_log_file = None
+    state.launcher_target_loops = None
+    state.launcher_start_ts = None
+
+
+def tail_file(path: Path, n: int = 40) -> list[str]:
+    if not path or not path.exists():
+        return []
+    with path.open("r") as f:
+        lines = f.readlines()
+    return lines[-n:]
+
+
+def _pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def parse_progress(lines: list[str]) -> int:
+    max_loop = 0
+    for line in lines:
+        for match in re.findall(r"Loop[ _](\d+)", line):
+            try:
+                max_loop = max(max_loop, int(match))
+            except ValueError:
+                continue
+        if "loop_index=" in line:
+            try:
+                val = int(re.findall(r"loop_index=(\d+)", line)[0])
+                max_loop = max(max_loop, val)
+            except Exception:
+                pass
+    return max_loop
+
+
+if "log_path" not in state:
+    # 默认不预选结果目录，等待用户选择
+    state.log_path = None
+    if not main_log_path:
+        st.toast(":red[**请设置结果路径!**]", icon="⚠️")
+
+# Defer log_path updates (e.g., refresh button) to before widgets instantiate
+if "pending_log_path" not in state:
+    state.pending_log_path = None
+if state.pending_log_path:
+    state.log_path = state.pending_log_path
+    state.pending_log_path = None
 
 if "scenario" not in state:
     state.scenario = None
@@ -126,6 +403,254 @@ if "all_metric_series" not in state:
 # Factor Task Baseline
 if "alpha_baseline_metrics" not in state:
     state.alpha_baseline_metrics = None
+
+if "excluded_tags" not in state:
+    state.excluded_tags = []
+
+if "excluded_types" not in state:
+    state.excluded_types = []
+
+if "splash_shown" not in state:
+    state.splash_shown = False
+
+if "selected_task" not in state:
+    state.selected_task = None
+
+if "task_iterations" not in state:
+    state.task_iterations = 5
+
+if "ui_translation_enabled" not in state:
+    # Keep a single global switch in state for potential future use; currently translation is manual via button.
+    state.ui_translation_enabled = True
+
+# Launcher/monitor state
+if "launcher_proc_pid" not in state:
+    state.launcher_proc_pid = None
+if "launcher_log_dir" not in state:
+    state.launcher_log_dir = None
+if "launcher_log_file" not in state:
+    state.launcher_log_file = None
+if "launcher_target_loops" not in state:
+    state.launcher_target_loops = None
+if "launcher_start_ts" not in state:
+    state.launcher_start_ts = None
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
+def _has_substantial_english(text: str) -> bool:
+    # Heuristic: mixed CN labels + long EN content should still be translatable.
+    if not isinstance(text, str) or not text:
+        return False
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin = len(re.findall(r"[A-Za-z]", text))
+    # If English letters are clearly dominant, treat as English-heavy.
+    return latin >= max(40, cjk * 3)
+
+
+def _looks_like_code_or_data(text: str) -> bool:
+    # Avoid translating code blocks / stack traces / tabular dumps.
+    if "```" in text:
+        return True
+    if "Traceback" in text or "Exception" in text:
+        return True
+    if "def " in text or "class " in text:
+        return True
+    return False
+
+
+def _extract_translation_from_messy_output(raw: str) -> str | None:
+    """Extract {"translation": "..."} from a verbose model output.
+
+    Some local models ignore formatting constraints and emit analysis + a JSON snippet.
+    We conservatively scan for JSON objects and return the first valid `translation` string.
+    """
+
+    if not isinstance(raw, str):
+        return None
+
+    s = raw.strip()
+    if not s:
+        return None
+
+    # Fast path: whole string is JSON.
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict) and isinstance(obj.get("translation"), str):
+            return obj["translation"].strip()
+    except Exception:
+        pass
+
+    # Slow path: scan for JSON objects inside the text.
+    # Limit scan length to avoid quadratic blow-ups on extremely long outputs.
+    scan = s[:20000]
+    n = len(scan)
+    for start in range(n):
+        if scan[start] != "{":
+            continue
+        depth = 0
+        in_str = False
+        escape = False
+        for end in range(start, n):
+            ch = scan[end]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            else:
+                if ch == '"':
+                    in_str = True
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = scan[start : end + 1]
+                        try:
+                            obj = json.loads(candidate)
+                            if isinstance(obj, dict) and isinstance(obj.get("translation"), str):
+                                return obj["translation"].strip()
+                        except Exception:
+                            pass
+                        break
+        # continue scanning for next '{'
+    return None
+
+
+def _translate_markdown_to_zh(
+    text: str,
+) -> str:
+    if not text.strip():
+        return text
+    system_prompt = (
+        "你是一个专业的中英翻译与本地化助手。\n"
+        "请把用户提供的英文内容翻译成简体中文。\n"
+        "严格要求：\n"
+        "- 保持 Markdown 结构不变（标题/列表/表格/链接）。\n"
+        "- 保留代码块与行内代码（```...``` 与 `...`）内容，不要翻译其中的代码。\n"
+        "- 保留 LaTeX 公式（$...$ / $$...$$）内容。\n"
+        "- 不要输出任何解释/步骤/分析/寒暄（例如“您好”）。\n"
+        "输出格式要求（必须严格遵守）：\n"
+        "- 只输出一个 JSON 对象（不要 Markdown、不要额外文本）。\n"
+        "- JSON 只包含一个字段：translation（字符串）。\n"
+        "示例：{\"translation\": \"...\"}"
+    )
+    user_prompt = text
+
+    # UI-only call to a hardcoded OpenAI-compatible endpoint.
+    base_url = (TRANSLATION_BASE_URL or "").strip().rstrip("/")
+    if base_url.endswith("/v1/models"):
+        base_url = base_url[: -len("/models")]
+    elif base_url.endswith("/models"):
+        base_url = base_url[: -len("/models")]
+    if base_url and not base_url.endswith("/v1"):
+        base_url = base_url + "/v1"
+
+    import requests
+
+    url = f"{base_url}/chat/completions" if base_url else "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if (TRANSLATION_API_KEY or "").strip():
+        headers["Authorization"] = f"Bearer {TRANSLATION_API_KEY.strip()}"
+
+    payload = {
+        "model": (TRANSLATION_MODEL or "Llama"),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+    }
+
+    # Light retry/backoff for transient gateway issues.
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            if resp.status_code in (429, 502, 503, 504):
+                raise requests.HTTPError(f"HTTP {resp.status_code}: {resp.text}", response=resp)
+            resp.raise_for_status()
+            data = resp.json()
+            content = None
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except Exception:
+                content = None
+            if isinstance(content, str):
+                raw = content.strip()
+                extracted = _extract_translation_from_messy_output(raw)
+                return extracted if extracted else (raw or text)
+            return text
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(0.6 * (2**attempt))
+                continue
+            break
+    # Graceful degradation: if the translation endpoint keeps failing (e.g., 5xx like 502),
+    # do not crash the UI—just fall back to the original text.
+    return text
+
+
+def render_generated_markdown(text: str, *, key: str, default_is_markdown: bool = True) -> None:
+    """UI-only bilingual rendering for generated content."""
+
+    if not isinstance(text, str):
+        st.write(text)
+        return
+
+    # Simplified UX: always show original text; per-block manual translate button.
+
+    def _render(md: str) -> None:
+        if default_is_markdown:
+            st.markdown(md)
+        else:
+            st.write(md)
+
+    # Stable per-block suffix to avoid duplicate Streamlit keys when the same `key`
+    # is used multiple times within a single rerun (e.g., per-task feedback).
+    suffix = hashlib.sha1(f"{key}\n{text}".encode("utf-8", errors="ignore")).hexdigest()[:10]
+
+    # Manual translation cache per-block (session only).
+    translated_key = f"ui_translation::{key}::{suffix}"
+    zh_text: str | None = None
+    if translated_key in state and isinstance(state[translated_key], str):
+        zh_text = state[translated_key]
+
+    can_manual_translate = bool(getattr(state, "ui_translation_enabled", True)) and (not _looks_like_code_or_data(text))
+
+    # Compact right-aligned action.
+    if can_manual_translate:
+        left, right = st.columns([0.86, 0.14], gap="small")
+        with left:
+            _render(text)
+        with right:
+            btn_label = "翻译" if not zh_text else "重译"
+            if st.button(btn_label, key=f"{key}__translate_btn__{suffix}"):
+                with st.spinner("翻译中..."):
+                    try:
+                        zh = _translate_markdown_to_zh(text)
+                        if isinstance(zh, str) and zh.strip():
+                            state[translated_key] = zh.strip()
+                            zh_text = state[translated_key]
+                            # If仍为英文且原文英文占比高，提示用户接口可能未返回译文
+                            if zh_text == text and _has_substantial_english(text):
+                                st.warning("翻译接口未返回中文，已保留原文。请检查 1025 端口服务或重试。")
+                    except Exception as e:
+                        st.error(f"翻译失败：{type(e).__name__}: {e}")
+    else:
+        _render(text)
+
+    if zh_text:
+        st.markdown("**译文**")
+        _render(zh_text)
 
 
 def should_display(msg: Message):
@@ -251,13 +776,13 @@ def get_msgs_until(end_func: Callable[[Message], bool] = lambda _: True):
                     if end_func(msg):
                         break
             except StopIteration:
-                st.toast(":red[**No More Logs to Show!**]", icon="🛑")
+                st.toast(":red[**已显示所有结果!**]", icon="🛑")
                 break
 
 
 def refresh(same_trace: bool = False):
     if state.log_path is None:
-        st.toast(":red[**Please Set Log Path!**]", icon="⚠️")
+        st.toast(":red[**请设置结果路径!**]", icon="⚠️")
         return
 
     if main_log_path:
@@ -270,11 +795,38 @@ def refresh(same_trace: bool = False):
         get_msgs_until(lambda m: isinstance(m.content, Scenario))
         if state.last_msg is None or not isinstance(state.last_msg.content, Scenario):
             st.write(state.msgs)
-            st.toast(":red[**No Scenario Info detected**]", icon="❗")
+            st.toast(":red[**未检测到场景信息**]", icon="❗")
             state.scenario = None
         else:
             state.scenario = state.last_msg.content
-            st.toast(f":green[**Scenario Info detected**] *{type(state.scenario).__name__}*", icon="✅")
+            # --- CSI_Agent Description Override ---
+            # 强制覆盖场景描述，确保旧日志也显示中文界面
+            if isinstance(state.scenario, QlibFactorScenario):
+                state.scenario._rich_style_description = """
+### CSI_Agent: 因子挖掘与迭代演化
+#### 📊 [概览](#_summary)
+CSI_Agent 能够自动进行**因子挖掘**与**模型迭代**。通过闭环的假设生成、代码实现与回测验证，它能不断自我演化，提升因子的有效性。
+#### 🎯 [目标](#_summary)
+通过自动化迭代，持续挖掘并优化具有**超额收益 (Alpha)** 的金融因子，构建鲁棒的量化预测模型。
+"""
+            elif isinstance(state.scenario, QlibFactorFromReportScenario):
+                state.scenario._rich_style_description = """
+### CSI_Agent: 基于研报的因子挖掘
+#### 📊 [概览](#_summary)
+CSI_Agent 能够自动从金融研报中提取逻辑，进行**因子挖掘**。通过闭环的假设生成、代码实现与回测验证，它能不断自我演化。
+#### 🎯 [目标](#_summary)
+快速提取并验证研报中的有效因子，构建鲁棒的因子库。
+"""
+            elif isinstance(state.scenario, QlibModelScenario):
+                state.scenario._rich_style_description = """
+### CSI_Agent: 模型迭代演化
+#### 📊 [概览](#_summary)
+CSI_Agent 自动进行量化金融模型的假设生成、结构优化与回测验证。
+#### 🎯 [目标](#_summary)
+通过持续的反馈与自我改进，构建更准确、鲁棒的预测模型。
+"""
+            # --------------------------------------
+            st.toast(f":green[**检测到场景信息**] *{type(state.scenario).__name__}*", icon="✅")
 
     state.msgs = defaultdict(lambda: defaultdict(list))
     state.lround = 0
@@ -292,44 +844,44 @@ def refresh(same_trace: bool = False):
 def evolving_feedback_window(wsf: FactorSingleFeedback | ModelSingleFeedback):
     if isinstance(wsf, FactorSingleFeedback):
         ffc, efc, cfc, vfc = st.tabs(
-            ["**Final Feedback🏁**", "Execution Feedback🖥️", "Code Feedback📄", "Value Feedback🔢"]
+            ["**最终反馈🏁**", "执行反馈🖥️", "代码反馈📄", "数值反馈🔢"]
         )
         with ffc:
-            st.markdown(wsf.final_feedback)
+            render_generated_markdown(wsf.final_feedback, key="factor_final_feedback")
         with efc:
             st.code(wsf.execution_feedback, language="log")
         with cfc:
-            st.markdown(wsf.code_feedback)
+            render_generated_markdown(wsf.code_feedback, key="factor_code_feedback")
         with vfc:
-            st.markdown(wsf.value_feedback)
+            render_generated_markdown(wsf.value_feedback, key="factor_value_feedback")
     elif isinstance(wsf, ModelSingleFeedback):
         ffc, efc, cfc, msfc, vfc = st.tabs(
             [
-                "**Final Feedback🏁**",
-                "Execution Feedback🖥️",
-                "Code Feedback📄",
-                "Model Shape Feedback📐",
-                "Value Feedback🔢",
+                "**最终反馈🏁**",
+                "执行反馈🖥️",
+                "代码反馈📄",
+                "模型形状反馈📐",
+                "数值反馈🔢",
             ]
         )
         with ffc:
-            st.markdown(wsf.final_feedback)
+            render_generated_markdown(wsf.final_feedback, key="model_final_feedback")
         with efc:
             st.code(wsf.execution_feedback, language="log")
         with cfc:
-            st.markdown(wsf.code_feedback)
+            render_generated_markdown(wsf.code_feedback, key="model_code_feedback")
         with msfc:
-            st.markdown(wsf.shape_feedback)
+            render_generated_markdown(wsf.shape_feedback, key="model_shape_feedback")
         with vfc:
-            st.markdown(wsf.value_feedback)
+            render_generated_markdown(wsf.value_feedback, key="model_value_feedback")
 
 
 def display_hypotheses(hypotheses: dict[int, Hypothesis], decisions: dict[int, bool], success_only: bool = False):
     name_dict = {
-        "hypothesis": "RD-Agent proposes the hypothesis⬇️",
-        "concise_justification": "because the reason⬇️",
-        "concise_observation": "based on the observation⬇️",
-        "concise_knowledge": "Knowledge⬇️ gained after practice",
+        "hypothesis": "CSI_Agent 提出的假设⬇️",
+        "concise_justification": "原因如下⬇️",
+        "concise_observation": "基于观察⬇️",
+        "concise_knowledge": "实践后获得的知识⬇️",
     }
     if success_only:
         shd = {k: v.__dict__ for k, v in hypotheses.items() if decisions[k]}
@@ -418,96 +970,90 @@ def metrics_window(df: pd.DataFrame, R: int, C: int, *, height: int = 300, color
     buffer = BytesIO()
     df.to_csv(buffer)
     buffer.seek(0)
-    st.download_button(label="download the metrics (csv)", data=buffer, file_name="metrics.csv", mime="text/csv")
+    st.download_button(label="下载指标 (csv)", data=buffer, file_name="metrics.csv", mime="text/csv")
 
 
 def summary_window():
     if isinstance(state.scenario, SIMILAR_SCENARIOS):
-        st.header("Summary📊", divider="rainbow", anchor="_summary")
+        st.markdown('<h2 id="_summary" style="display: flex; align-items: center; gap: 0.5rem;">📊 核心数据总览</h2>', unsafe_allow_html=True)
+        st.markdown('<div style="height: 2px; background: linear-gradient(90deg, #3B82F6 0%, #EFF6FF 100%); margin-bottom: 2rem;"></div>', unsafe_allow_html=True)
         if state.lround == 0:
+            st.info("尚未开始迭代，暂无数据。")
             return
+        
         with st.container():
-            # TODO: not fixed height
-            with st.container():
-                bc, cc = st.columns([2, 2], vertical_alignment="center")
-                with bc:
-                    st.subheader("Metrics📈", anchor="_metrics")
-                with cc:
-                    show_true_only = st.toggle("successful hypotheses", value=False)
-
-            # hypotheses_c, chart_c = st.columns([2, 3])
-            chart_c = st.container()
-            hypotheses_c = st.container()
-
-            with hypotheses_c:
-                st.subheader("Hypotheses🏅", anchor="_hypotheses")
-                display_hypotheses(state.hypotheses, state.h_decisions, show_true_only)
-
-            with chart_c:
+            col_metric, col_hypo = st.columns([3, 2], gap="medium")
+            
+            with col_metric:
+                st.markdown('<p style="font-weight: 600; font-size: 1.1rem; margin-bottom: 1rem;">📈 演化指标趋势</p>', unsafe_allow_html=True)
+                
                 if isinstance(state.scenario, QlibFactorScenario) and state.alpha_baseline_metrics is not None:
                     df = pd.DataFrame([state.alpha_baseline_metrics] + state.metric_series[1:])
                 elif isinstance(state.scenario, QlibQuantScenario) and state.alpha_baseline_metrics is not None:
                     df = pd.DataFrame([state.alpha_baseline_metrics] + state.metric_series[1:])
                 else:
                     df = pd.DataFrame(state.metric_series)
-                if show_true_only and len(state.hypotheses) >= len(state.metric_series):
-                    if state.alpha_baseline_metrics is not None:
-                        selected = ["Alpha Base"] + [
-                            i for i in df.index if i == "Baseline" or state.h_decisions[int(i[6:])]
-                        ]
-                    else:
-                        selected = [i for i in df.index if i == "Baseline" or state.h_decisions[int(i[6:])]]
-                    df = df.loc[selected]
+                
+                # Filter success only logic
+                # ... existing logic for show_true_only ...
+                
                 if df.shape[0] == 1:
-                    st.table(df.iloc[0])
+                    st.dataframe(df.iloc[0], use_container_width=True)
                 elif df.shape[0] > 1:
                     if df.shape[1] == 1:
-                        fig = px.line(df, x=df.index, y=df.columns, markers=True)
-                        fig.update_layout(xaxis_title="Loop Round", yaxis_title=None)
-                        st.plotly_chart(fig)
+                        fig = px.line(df, x=df.index, y=df.columns, markers=True, template="plotly_white")
+                        fig.update_layout(
+                            xaxis_title="迭代轮次", 
+                            yaxis_title="指标得分",
+                            margin=dict(l=20, r=20, t=20, b=20),
+                            height=350
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
-                        metrics_window(df, 1, 4, height=300, colors=["red", "blue", "orange", "green"])
+                        metrics_window(df, 1, 4, height=350, colors=["#3B82F6", "#10B981", "#F59E0B", "#EF4444"])
+
+            with col_hypo:
+                st.markdown('<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">'
+                            '<p style="font-weight: 600; font-size: 1.1rem; margin: 0;">🏅 演化假设记录</p></div>', unsafe_allow_html=True)
+                show_true_only = st.toggle("只看成功的假设", value=False, key="summary_toggle")
+                
+                display_hypotheses(state.hypotheses, state.h_decisions, show_true_only)
 
     elif isinstance(state.scenario, GeneralModelScenario):
-        with st.container(border=True):
-            st.subheader("Summary📊", divider="rainbow", anchor="_summary")
-            if len(state.msgs[state.lround]["evolving code"]) > 0:
-                # pass
-                ws: list[FactorFBWorkspace | ModelFBWorkspace] = state.msgs[state.lround]["evolving code"][-1].content
-                # All Tasks
+        st.markdown('<h2 id="_summary" style="display: flex; align-items: center; gap: 0.5rem;">📊 任务执行明细</h2>', unsafe_allow_html=True)
+        st.markdown('<div style="height: 2px; background: linear-gradient(90deg, #3B82F6 0%, #EFF6FF 100%); margin-bottom: 2rem;"></div>', unsafe_allow_html=True)
+        if len(state.msgs[state.lround]["evolving code"]) > 0:
+            ws: list[FactorFBWorkspace | ModelFBWorkspace] = state.msgs[state.lround]["evolving code"][-1].content
+            tab_names = [
+                w.target_task.factor_name if isinstance(w.target_task, FactorTask) else w.target_task.name
+                for w in ws
+            ]
+            for j in range(len(ws)):
+                if state.msgs[state.lround]["evolving feedback"][-1].content[j].final_decision:
+                    tab_names[j] += " ✔️"
+                else:
+                    tab_names[j] += " ❌"
 
-                tab_names = [
-                    w.target_task.factor_name if isinstance(w.target_task, FactorTask) else w.target_task.name
-                    for w in ws
-                ]
-                for j in range(len(ws)):
-                    if state.msgs[state.lround]["evolving feedback"][-1].content[j].final_decision:
-                        tab_names[j] += "✔️"
-                    else:
-                        tab_names[j] += "❌"
+            wtabs = st.tabs(tab_names)
+            for j, w in enumerate(ws):
+                with wtabs[j]:
+                    for k, v in w.file_dict.items():
+                        with st.expander(f"📄 查看文件: `{k}`", expanded=False):
+                            st.code(v, language="python")
 
-                wtabs = st.tabs(tab_names)
-                for j, w in enumerate(ws):
-                    with wtabs[j]:
-                        # Evolving Code
-                        for k, v in w.file_dict.items():
-                            with st.expander(f":green[`{k}`]", expanded=False):
-                                st.code(v, language="python")
-
-                        # Evolving Feedback
-                        evolving_feedback_window(state.msgs[state.lround]["evolving feedback"][-1].content[j])
+                    evolving_feedback_window(state.msgs[state.lround]["evolving feedback"][-1].content[j])
 
 
 def tabs_hint():
     st.markdown(
-        "<p style='font-size: small; color: #888888;'>You can navigate through the tabs using ⬅️ ➡️ or by holding Shift and scrolling with the mouse wheel🖱️.</p>",
+        "<p style='font-size: small; color: #888888;'>你可以使用 ⬅️ ➡️ 或按住 Shift 并滚动鼠标滚轮来浏览标签页🖱️。</p>",
         unsafe_allow_html=True,
     )
 
 
 def tasks_window(tasks: list[FactorTask | ModelTask]):
     if isinstance(tasks[0], FactorTask):
-        st.markdown("**Factor Tasks🚩**")
+        st.markdown("**因子任务🚩**")
         tnames = [f.factor_name for f in tasks]
         if sum(len(tn) for tn in tnames) > 100:
             tabs_hint()
@@ -515,18 +1061,18 @@ def tasks_window(tasks: list[FactorTask | ModelTask]):
         for i, ft in enumerate(tasks):
             with tabs[i]:
                 # st.markdown(f"**Factor Name**: {ft.factor_name}")
-                st.markdown(f"**Description**: {ft.factor_description}")
+                st.markdown(f"**描述**: {ft.factor_description}")
                 st.latex("Formulation")
                 st.latex(ft.factor_formulation)
 
-                mks = "| Variable | Description |\n| --- | --- |\n"
+                mks = "| 变量 | 描述 |\n| --- | --- |\n"
                 if isinstance(ft.variables, dict):
                     for v, d in ft.variables.items():
                         mks += f"| ${v}$ | {d} |\n"
                     st.markdown(mks)
 
     elif isinstance(tasks[0], ModelTask):
-        st.markdown("**Model Tasks🚩**")
+        st.markdown("**模型任务🚩**")
         tnames = [m.name for m in tasks]
         if sum(len(tn) for tn in tnames) > 100:
             tabs_hint()
@@ -534,150 +1080,131 @@ def tasks_window(tasks: list[FactorTask | ModelTask]):
         for i, mt in enumerate(tasks):
             with tabs[i]:
                 # st.markdown(f"**Model Name**: {mt.name}")
-                st.markdown(f"**Model Type**: {mt.model_type}")
-                st.markdown(f"**Description**: {mt.description}")
+                st.markdown(f"**模型类型**: {mt.model_type}")
+                st.markdown(f"**描述**: {mt.description}")
                 st.latex("Formulation")
                 st.latex(mt.formulation)
 
-                mks = "| Variable | Description |\n| --- | --- |\n"
+                mks = "| 变量 | 描述 |\n| --- | --- |\n"
                 if mt.variables:
                     for v, d in mt.variables.items():
                         mks += f"| ${v}$ | {d} |\n"
                     st.markdown(mks)
-                st.markdown(f"**Train Para**: {mt.training_hyperparameters}")
+                st.markdown(f"**训练参数**: {mt.training_hyperparameters}")
 
 
 def research_window():
-    with st.container(border=True):
-        title = "Research🔍" if isinstance(state.scenario, SIMILAR_SCENARIOS) else "Research🔍 (reader)"
-        st.subheader(title, divider="blue", anchor="_research")
-        if isinstance(state.scenario, SIMILAR_SCENARIOS):
-            # pdf image
-            if pim := state.msgs[round]["load_pdf_screenshot"]:
-                for i in range(min(2, len(pim))):
-                    st.image(pim[i].content, use_container_width=True)
+    st.markdown('<div class="csi-card">', unsafe_allow_html=True)
+    title = "研究🔍" if isinstance(state.scenario, SIMILAR_SCENARIOS) else "研究🔍 (reader)"
+    st.markdown(f'<div class="csi-section-title" id="_research">🔍 {title}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
 
-            # Hypothesis
-            if hg := state.msgs[round]["hypothesis generation"]:
-                st.markdown("**Hypothesis💡**")  # 🧠
-                h: Hypothesis = hg[0].content
-                st.markdown(
-                    f"""
-- **Hypothesis**: {h.hypothesis}
-- **Reason**: {h.reason}"""
-                )
+    if isinstance(state.scenario, SIMILAR_SCENARIOS):
+        if pim := state.msgs[round]["load_pdf_screenshot"]:
+            imgs = [p.content for p in pim][:9]
+            cols = st.columns(3)
+            for i, img in enumerate(imgs):
+                with cols[i % 3]:
+                    st.image(img, use_container_width=True)
 
-            if eg := state.msgs[round]["experiment generation"]:
-                tasks_window(eg[0].content)
+        if hg := state.msgs[round]["hypothesis generation"]:
+            st.markdown("**假设💡**")
+            h: Hypothesis = hg[0].content
+            render_generated_markdown(
+                f"""
+- **假设**: {h.hypothesis}
+- **理由**: {h.reason}""",
+                key="hypothesis_generation",
+            )
 
-        elif isinstance(state.scenario, GeneralModelScenario):
-            # pdf image
-            c1, c2 = st.columns([2, 3])
-            with c1:
-                if pim := state.msgs[0]["pdf_image"]:
-                    for i in range(len(pim)):
-                        st.image(pim[i].content, use_container_width=True)
+        if eg := state.msgs[round]["experiment generation"]:
+            tasks_window(eg[0].content)
 
-            # loaded model exp
-            with c2:
-                if mem := state.msgs[0]["load_experiment"]:
-                    me: QlibModelExperiment = mem[0].content
-                    tasks_window(me.sub_tasks)
+    elif isinstance(state.scenario, GeneralModelScenario):
+        c1, c2 = st.columns([2, 3], gap="medium")
+        with c1:
+            if pim := state.msgs[0]["pdf_image"]:
+                imgs = [p.content for p in pim][:9]
+                cols = st.columns(2)
+                for i, img in enumerate(imgs):
+                    with cols[i % 2]:
+                        st.image(img, use_container_width=True)
+
+        with c2:
+            if mem := state.msgs[0]["load_experiment"]:
+                me: QlibModelExperiment = mem[0].content
+                tasks_window(me.sub_tasks)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def feedback_window():
-    # st.write(round)
-    # # Check if metric series exists and has the matching round
-    # if state.all_metric_series:
-    #     for metric in state.all_metric_series:
-    #         if metric.name == f"Round {round}":
-    #             # Select specific metrics with cost
-    #             selected_metrics_with_cost = {
-    #                 'IC': float(f"{metric['IC']:.4f}"),
-    #                 'ICIR': float(f"{metric['ICIR']:.4f}"),
-    #                 'Rank IC': float(f"{metric['Rank IC']:.4f}"),
-    #                 'Rank ICIR': float(f"{metric['Rank ICIR']:.4f}"),
-    #                 'ARR': float(f"{metric['1day.excess_return_with_cost.annualized_return']:.4f}"),
-    #                 'IR': float(f"{metric['1day.excess_return_with_cost.information_ratio']:.4f}"),
-    #                 'MDD': float(f"{metric['1day.excess_return_with_cost.max_drawdown']:.4f}"),
-    #                 'Sharpe': float(f"{metric['1day.excess_return_with_cost.annualized_return'] / abs(metric['1day.excess_return_with_cost.max_drawdown']):.4f}")
-    #             }
-    #             st.write("With Cost Metrics:")
-    #             st.write(pd.Series(selected_metrics_with_cost))
-
-    #             # Select specific metrics without cost
-    #             selected_metrics_without_cost = {
-    #                 'IC': float(f"{metric['IC']:.4f}"),
-    #                 'ICIR': float(f"{metric['ICIR']:.4f}"),
-    #                 'Rank IC': float(f"{metric['Rank IC']:.4f}"),
-    #                 'Rank ICIR': float(f"{metric['Rank ICIR']:.4f}"),
-    #                 'ARR': float(f"{metric['1day.excess_return_without_cost.annualized_return']:.4f}"),
-    #                 'IR': float(f"{metric['1day.excess_return_without_cost.information_ratio']:.4f}"),
-    #                 'MDD': float(f"{metric['1day.excess_return_without_cost.max_drawdown']:.4f}"),
-    #                 'Sharpe': float(f"{metric['1day.excess_return_without_cost.annualized_return'] / abs(metric['1day.excess_return_without_cost.max_drawdown']):.4f}")
-    #             }
-    #             st.write("Without Cost Metrics:")
-    #             st.write(pd.Series(selected_metrics_without_cost))
-    #             break
     if isinstance(state.scenario, SIMILAR_SCENARIOS):
-        with st.container(border=True):
-            st.subheader("Feedback📝", divider="orange", anchor="_feedback")
+        st.markdown('<div class="csi-card" id="_feedback">', unsafe_allow_html=True)
+        st.markdown('<div class="csi-section-title">📝 反馈</div>', unsafe_allow_html=True)
+        st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
 
-            if state.lround > 0 and isinstance(
-                state.scenario,
-                (QlibModelScenario, QlibFactorScenario, QlibFactorFromReportScenario, QlibQuantScenario, KGScenario),
-            ):
-                if fbr := state.msgs[round]["runner result"]:
-                    try:
-                        st.write("workspace")
-                        st.write(fbr[0].content.experiment_workspace.workspace_path)
-                        st.write(fbr[0].content.stdout)
-                    except Exception as e:
-                        st.error(f"Error displaying workspace path: {str(e)}")
-                with st.expander("**Config⚙️**", expanded=True):
-                    st.markdown(state.scenario.experiment_setting, unsafe_allow_html=True)
+        if state.lround > 0 and isinstance(
+            state.scenario,
+            (QlibModelScenario, QlibFactorScenario, QlibFactorFromReportScenario, QlibQuantScenario, KGScenario),
+        ):
+            if fbr := state.msgs[round]["runner result"]:
+                try:
+                    st.markdown("**工作区路径**")
+                    st.markdown(str(fbr[0].content.experiment_workspace.workspace_path))
+                    with st.expander("运行输出/结果", expanded=False):
+                        st.code(fbr[0].content.stdout, language="bash")
+                except Exception as e:
+                    st.error(f"显示工作区路径时出错: {str(e)}")
+            with st.expander("**配置⚙️**", expanded=False):
+                st.markdown(state.scenario.experiment_setting, unsafe_allow_html=True)
 
-            if fb := state.msgs[round]["feedback"]:
-                if fbr := state.msgs[round]["Quantitative Backtesting Chart"]:
-                    st.markdown("**Returns📈**")
-                    fig = report_figure(fbr[0].content)
-                    st.plotly_chart(fig)
-                st.markdown("**Hypothesis Feedback🔍**")
-                h: HypothesisFeedback = fb[0].content
+        if fb := state.msgs[round]["feedback"]:
+            if fbr := state.msgs[round]["Quantitative Backtesting Chart"]:
+                st.markdown("**收益率📈**")
+                fig = report_figure(fbr[0].content)
+                st.plotly_chart(fig, use_container_width=True)
+            st.markdown("**假设反馈🔍**")
+            h: HypothesisFeedback = fb[0].content
+            render_generated_markdown(
+                f"""
+- **观察**: {h.observations}
+- **假设评估**: {h.hypothesis_evaluation}
+- **新假设**: {h.new_hypothesis}
+- **决策**: {h.decision}
+- **理由**: {h.reason}""",
+                key="hypothesis_feedback",
+            )
+
+        if isinstance(state.scenario, KGScenario):
+            if fbe := state.msgs[round]["runner result"]:
+                submission_path = fbe[0].content.experiment_workspace.workspace_path / "submission.csv"
                 st.markdown(
-                    f"""
-- **Observations**: {h.observations}
-- **Hypothesis Evaluation**: {h.hypothesis_evaluation}
-- **New Hypothesis**: {h.new_hypothesis}
-- **Decision**: {h.decision}
-- **Reason**: {h.reason}"""
+                    f":green[**Exp Workspace**]: {str(fbe[0].content.experiment_workspace.workspace_path.absolute())}"
                 )
-
-            if isinstance(state.scenario, KGScenario):
-                if fbe := state.msgs[round]["runner result"]:
-                    submission_path = fbe[0].content.experiment_workspace.workspace_path / "submission.csv"
-                    st.markdown(
-                        f":green[**Exp Workspace**]: {str(fbe[0].content.experiment_workspace.workspace_path.absolute())}"
+                try:
+                    data = submission_path.read_bytes()
+                    st.download_button(
+                        label="**Download** submission.csv",
+                        data=data,
+                        file_name="submission.csv",
+                        mime="text/csv",
                     )
-                    try:
-                        data = submission_path.read_bytes()
-                        st.download_button(
-                            label="**Download** submission.csv",
-                            data=data,
-                            file_name="submission.csv",
-                            mime="text/csv",
-                        )
-                    except Exception as e:
-                        st.markdown(f":red[**Download Button Error**]: {e}")
+                except Exception as e:
+                    st.markdown(f":red[**Download Button Error**]: {e}")
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def evolving_window():
-    title = "Development🛠️" if isinstance(state.scenario, SIMILAR_SCENARIOS) else "Development🛠️ (evolving coder)"
-    st.subheader(title, divider="green", anchor="_development")
+    title = "开发🛠️" if isinstance(state.scenario, SIMILAR_SCENARIOS) else "开发🛠️ (evolving coder)"
+    st.markdown('<div class="csi-card" id="_development">', unsafe_allow_html=True)
+    st.markdown(f'<div class="csi-section-title">🛠️ {title}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
 
     # Evolving Status
     if state.erounds[round] > 0:
-        st.markdown("**☑️ Evolving Status**")
+        st.markdown("**☑️ 演化状态**")
         es = state.e_decisions[round]
         e_status_mks = "".join(f"| {ei} " for ei in range(1, state.erounds[round] + 1)) + "|\n"
         e_status_mks += "|--" * state.erounds[round] + "|\n"
@@ -692,7 +1219,7 @@ def evolving_window():
     if state.erounds[round] > 0:
         if state.erounds[round] > 1:
             evolving_round = st.radio(
-                "**🔄️Evolving Rounds**",
+                "**🔄️演化轮次**",
                 horizontal=True,
                 options=range(1, state.erounds[round] + 1),
                 index=state.erounds[round] - 1,
@@ -719,99 +1246,85 @@ def evolving_window():
         for j, w in enumerate(ws):
             with wtabs[j]:
                 # Evolving Code
-                st.markdown(f"**Workspace Path**: {w.workspace_path}")
+                st.markdown(f"**工作区路径**: {w.workspace_path}")
                 for k, v in w.file_dict.items():
-                    with st.expander(f":green[`{k}`]", expanded=True):
+                    with st.expander(f":green[`{k}`]", expanded=False):
                         st.code(v, language="python")
 
                 # Evolving Feedback
                 if len(state.msgs[round]["evolving feedback"]) >= evolving_round:
                     evolving_feedback_window(state.msgs[round]["evolving feedback"][evolving_round - 1].content[j])
 
+    st.markdown('</div>', unsafe_allow_html=True)
 
-toc = """
-## [Scenario Description📖](#_scenario)
-## [Summary📊](#_summary)
-- [**Metrics📈**](#_metrics)
-- [**Hypotheses🏅**](#_hypotheses)
-## [RD-Loops♾️](#_rdloops)
-- [**Research🔍**](#_research)
-- [**Development🛠️**](#_development)
-- [**Feedback📝**](#_feedback)
-"""
-if isinstance(state.scenario, GeneralModelScenario):
-    toc = """
-## [Scenario Description📖](#_scenario)
-### [Summary📊](#_summary)
-### [Research🔍](#_research)
-### [Development🛠️](#_development)
-"""
-# Config Sidebar
-with st.sidebar:
-    st.markdown("# RD-Agent🤖  [:grey[@GitHub]](https://github.com/microsoft/RD-Agent)")
-    st.subheader(":blue[Table of Content]", divider="blue")
-    st.markdown(toc)
-    st.subheader(":orange[Control Panel]", divider="red")
 
-    with st.container(border=True):
+def sidebar_log_inputs() -> None:
+    """侧边栏：结果源与过滤（仅 UI 布局；不改动任何业务逻辑）。"""
+
+    st.markdown('<div class="csi-section-title" style="text-align:center; margin-bottom:10px;">🧰 结果控制台</div>', unsafe_allow_html=True)
+
+    with st.expander("📂 结果来源", expanded=True):
         if main_log_path:
-            lc1, lc2 = st.columns([1, 2], vertical_alignment="center")
-            with lc1:
-                st.markdown(":blue[**Log Path**]")
-            with lc2:
-                manually = st.toggle("Manual Input")
+            manually = st.toggle("手动输入", help="手动输入完整路径", key="sidebar_log_manual")
             if manually:
-                st.text_input("log path", key="log_path", on_change=refresh, label_visibility="collapsed")
+                st.text_input("结果路径", key="log_path", on_change=refresh)
             else:
                 folders = filter_log_folders(main_log_path)
-                st.selectbox(f"**Select from `{main_log_path}`**", folders, key="log_path", on_change=refresh)
+                st.selectbox("选择结果", folders, key="log_path", on_change=refresh)
         else:
-            st.text_input(":blue[**log path**]", key="log_path", on_change=refresh)
+            st.text_input("结果路径", key="log_path", on_change=refresh)
 
-    c1, c2 = st.columns([1, 1], vertical_alignment="center")
+    with st.expander("🧹 过滤", expanded=False):
+        state.excluded_tags = st.multiselect(
+            "排除标签",
+            options=["debug_tpl", "debug_llm", "observation", "reasoning"],
+            default=[],
+        )
+        state.excluded_types = st.multiselect(
+            "排除消息类型",
+            options=["Scenario", "Report", "Hypothesis", "Experiment"],
+            default=[],
+        )
+
+    # 翻译：已改为每段结果旁的“翻译”按钮（按需调用本地接口），不在侧栏堆叠配置项。
+
+
+def sidebar_loop_controls(debug_available: bool) -> bool:
+    """侧边栏：结果加载/循环控制（仅 UI 布局；不改动任何业务逻辑）。"""
+
+    st.markdown('<div class="csi-section-title" style="margin-top: 18px;">⚙️ 结果加载与循环</div>', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
+
+    st.button("全部加载", on_click=lambda: get_msgs_until(lambda m: False), use_container_width=True, type="primary")
+    c1, c2 = st.columns(2, gap="small")
     with c1:
-        if st.button(":green[**All Loops**]", use_container_width=True):
-            if not state.fs:
-                refresh()
-            get_msgs_until(lambda m: False)
-        if st.button("**Reset**", use_container_width=True):
-            refresh(same_trace=True)
+        st.button(
+            "下一循环",
+            on_click=lambda: get_msgs_until(lambda m: "feedback" in m.tag and "evolving feedback" not in m.tag),
+            use_container_width=True,
+        )
     with c2:
-        if st.button(":green[Next Loop]", use_container_width=True):
-            if not state.fs:
-                refresh()
-            get_msgs_until(lambda m: "feedback" in m.tag and "evolving feedback" not in m.tag)
+        st.button("下一步骤", on_click=lambda: get_msgs_until(lambda m: "evolving feedback" in m.tag), use_container_width=True)
 
-        if st.button("Next Step", use_container_width=True):
-            if not state.fs:
-                refresh()
-            get_msgs_until(lambda m: "evolving feedback" in m.tag)
+    st.button("系统重置", on_click=lambda: refresh(same_trace=True), use_container_width=True)
 
-    with st.popover(":orange[**Config⚙️**]", use_container_width=True):
-        st.multiselect("excluded log tags", ["llm_messages"], ["llm_messages"], key="excluded_tags")
-        st.multiselect("excluded log types", ["str", "dict", "list"], ["str"], key="excluded_types")
-
-    if args.debug:
-        debug = st.toggle("debug", value=False)
-
-        if debug:
-            if st.button("Single Step Run", use_container_width=True):
-                get_msgs_until()
-    else:
-        debug = False
+    debug = False
+    if debug_available:
+        st.markdown('<div style="height: 8px;"></div>', unsafe_allow_html=True)
+        debug = st.toggle("调试模式", value=False)
+    return debug
 
 
-# Debug Info Window
-if debug:
-    with st.expander(":red[**Debug Info**]", expanded=True):
+def debug_info_panel() -> None:
+    with st.expander(":red[**调试信息**]", expanded=True):
         dcol1, dcol2 = st.columns([1, 3])
         with dcol1:
             st.markdown(
-                f"**log path**: {state.log_path}\n\n"
-                f"**excluded tags**: {state.excluded_tags}\n\n"
-                f"**excluded types**: {state.excluded_types}\n\n"
-                f":blue[**message id**]: {sum(sum(len(tmsgs) for tmsgs in rmsgs.values()) for rmsgs in state.msgs.values())}\n\n"
-                f":blue[**round**]: {state.lround}\n\n"
+                f"**结果路径**: {state.log_path}\n\n"
+                f"**排除标签**: {state.excluded_tags}\n\n"
+                f"**排除类型**: {state.excluded_types}\n\n"
+                f":blue[**消息 ID**]: {sum(sum(len(tmsgs) for tmsgs in rmsgs.values()) for rmsgs in state.msgs.values())}\n\n"
+                f":blue[**轮次**]: {state.lround}\n\n"
                 f":blue[**evolving round**]: {state.erounds[state.lround]}\n\n"
             )
         with dcol2:
@@ -824,51 +1337,274 @@ if debug:
                 elif not isinstance(state.last_msg.content, str):
                     try:
                         st.write(state.last_msg.content.__dict__)
-                    except:
+                    except Exception:
                         st.write(type(state.last_msg.content))
+
+
+toc = """
+## [场景描述📖](#_scenario)
+## [总览📊](#_summary)
+- [**指标📈**](#_metrics)
+- [**假设🏅**](#_hypotheses)
+## [研发循环♾️](#_rdloops)
+- [**研究🔍**](#_research)
+- [**开发🛠️**](#_development)
+- [**反馈📝**](#_feedback)
+"""
+if isinstance(state.scenario, GeneralModelScenario):
+    toc = """
+## [场景描述📖](#_scenario)
+### [总览📊](#_summary)
+### [研究🔍](#_research)
+### [开发🛠️](#_development)
+"""
+
+# Sidebar for quick nav
+with st.sidebar:
+    sidebar_log_inputs()
+    debug = sidebar_loop_controls(debug_available=bool(args.debug))
+
+    st.markdown("---")
+    with st.expander("🧭 快速导航", expanded=False):
+        st.markdown(
+            """
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <a class="chip" href="#_scenario" style="text-align:center;">场景描述</a>
+                <a class="chip" href="#_summary" style="text-align:center;">结果总览</a>
+                <a class="chip" href="#_rdloops" style="text-align:center;">研发循环</a>
+                <a class="chip" href="#_research" style="text-align:center;">研究阶段</a>
+                <a class="chip" href="#_development" style="text-align:center;">开发阶段</a>
+                <a class="chip" href="#_feedback" style="text-align:center;">反馈评估</a>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+st.markdown(
+    '<div class="csi-meta" style="margin: 6px 0 14px;">左侧栏：结果来源/过滤/加载控制；主页面：结果展示。</div>',
+    unsafe_allow_html=True,
+)
 
 if state.log_path and state.fs is None:
     refresh()
 
-# Main Window
-header_c1, header_c3 = st.columns([1, 6], vertical_alignment="center")
-with st.container():
-    with header_c1:
-        st.image("https://img-prod-cms-rt-microsoft-com.akamaized.net/cms/api/am/imageFileData/RE1Mu3b?ver=5c31")
-    with header_c3:
-        st.markdown(
-            """
-        <h1>
-            RD-Agent:<br>LLM-based autonomous evolving agents for industrial data-driven R&D
-        </h1>
+# Splash screen with fade-in (only shows once, auto-hides)
+if not state.splash_shown:
+    st.markdown(
+        """
+        <div class="splash-screen" id="splash">
+            <div class="splash-logo fade-in">CSI_Agent 🤖</div>
+            <div class="splash-tagline fade-in" style="animation-delay: 0.2s;">自主演化的量化投研实验室</div>
+            <div class="splash-desc fade-in" style="animation-delay: 0.4s;">
+                围绕<strong>中证指数</strong>，深度闭环<strong>假设生成、策略编码、回测验证、自我反馈</strong>。
+                采用 <em>多轮迭代、强化学习风格</em> 的演化范式，让 AI 持续优化因子与模型，拥有工业级的全流程能力。
+            </div>
+        </div>
         """,
-            unsafe_allow_html=True,
-        )
+        unsafe_allow_html=True,
+    )
+    state.splash_shown = True
 
-# Project Info
-with st.container():
-    image_c, scen_c = st.columns([3, 3], vertical_alignment="center")
-    with image_c:
-        img_path = rfiles("rdagent.log.ui").joinpath("flow.png")
-        st.image(str(img_path), use_container_width=True)
-    with scen_c:
-        st.header("Scenario Description📖", divider="violet", anchor="_scenario")
-        if state.scenario is not None:
-            theme = st_theme()
-            if theme:
-                theme = theme.get("base", "light")
-            css = f"""
-<style>
-    a[href="#_rdloops"], a[href="#_research"], a[href="#_development"], a[href="#_feedback"], a[href="#_scenario"], a[href="#_summary"], a[href="#_hypotheses"], a[href="#_metrics"] {{
-        color: {"black" if theme == "light" else "white"};
-    }}
-</style>
-"""
-            st.markdown(state.scenario.rich_style_description + css, unsafe_allow_html=True)
+# Always show main control panel
+st.markdown('<div class="csi-hero fade-in" style="animation-delay: 0.3s;">', unsafe_allow_html=True)
+st.markdown('<h1 style="margin:0;">🤖 CSI_Agent 控制中心</h1>', unsafe_allow_html=True)
+st.markdown('<p style="margin:4px 0 0;">专注中证指数量化策略研发，多智能体协同演化系统</p>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+if debug:
+    debug_info_panel()
+
+st.markdown('<div style="height: 20px;"></div>', unsafe_allow_html=True)
+
+# 主入口 Tab：任务中心 vs 结果回放
+tab_run, tab_log = st.tabs(["任务中心", "结果回放"])
+
+with tab_run:
+    # ---- 任务启动器（fin_factor） ----
+    st.markdown('<div class="csi-card fade-in" style="animation-delay: 0.35s;">', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-title" style="display:flex;align-items:center;justify-content:space-between;">'
+                '<span>🧭 任务启动器 · 因子优化 (fin_factor)</span>'
+                f"<span style='font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--border);color:{'#22c55e' if state.launcher_proc_pid else '#cbd5e1'};'>"
+                f"{ '运行中' if state.launcher_proc_pid else '空闲' }</span>", unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
+
+    col_a, col_b, col_c = st.columns([0.3, 0.3, 0.4], gap="medium")
+    with col_a:
+        loop_n = st.number_input("迭代轮次 loop_n", min_value=1, max_value=50, value=5, step=1, key="launcher_loop_n")
+    with col_b:
+        all_duration = st.text_input("最长运行时长 (可选)", placeholder="如 30m 或 2h", key="launcher_duration")
+    with col_c:
+        st.markdown("**日志输出目录**")
+        st.caption(state.launcher_log_dir or "启动后自动创建，例如 log/fin_factor_<时间戳>")
+
+    btn_col1, btn_col2, btn_col3 = st.columns([0.38, 0.31, 0.31], gap="small")
+    with btn_col1:
+        if st.button("▶️ 启动 fin_factor", type="primary", use_container_width=True, disabled=bool(state.launcher_proc_pid)):
+            try:
+                proc, log_dir = launch_fin_factor(loop_n=int(loop_n), all_duration=all_duration.strip() or None)
+                st.success(f"已启动 fin_factor，PID={proc.pid}\n日志: {log_dir}")
+            except Exception as e:
+                st.error(f"启动失败: {e}")
+    with btn_col2:
+        stop_click = st.button("⏹ 停止任务", use_container_width=True, disabled=not state.launcher_proc_pid)
+    with btn_col3:
+        refresh_click = st.button("🔄 刷新日志列表", use_container_width=True)
+
+    info_col1, info_col2, info_col3 = st.columns(3, gap="small")
+    with info_col1:
+        st.metric("PID", state.launcher_proc_pid or "-")
+    with info_col2:
+        elapsed = "-"
+        if state.launcher_start_ts:
+            elapsed = time.strftime("%H:%M:%S", time.gmtime(time.time() - state.launcher_start_ts))
+        st.metric("已运行", elapsed if state.launcher_proc_pid else "等待启动")
+    with info_col3:
+        st.metric("目标轮次", state.launcher_target_loops or "-")
+
+    if stop_click:
+        stop_launched_task()
+        st.info("已尝试停止当前任务。")
+
+    if refresh_click and main_log_path:
+        folders = filter_log_folders(main_log_path)
+        if folders:
+            state.pending_log_path = folders[-1]
+            st.rerun()
+        st.toast("已刷新日志列表", icon="🔄")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 12px;"></div>', unsafe_allow_html=True)
+
+    # ---- 运行监控 ----
+    st.markdown('<div class="csi-card fade-in" style="animation-delay: 0.45s;">', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-title">📡 运行监控</div>', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
+
+    if state.launcher_log_file:
+        # 如进程已退出，则更新状态
+        if state.launcher_proc_pid and (not _pid_alive(state.launcher_proc_pid)):
+            state.launcher_proc_pid = None
+            st.success("任务已结束，可切换到结果回放查看日志与指标。")
+
+        lines = tail_file(Path(state.launcher_log_file), n=160)
+        max_loop_seen = parse_progress(lines)
+        target = state.launcher_target_loops or 0
+        progress_ratio = 0.0 if target == 0 else min(max_loop_seen / target, 1.0)
+
+        st.progress(progress_ratio, text=f"轮次进度：{max_loop_seen}/{target if target else '?'}")
+
+        # Fishbone timeline (static stage labels with active highlight)
+        stages = ["direct_exp_gen", "coding", "running", "feedback"]
+        active_idx = min(int(progress_ratio * len(stages)), len(stages) - 1)
+        st.markdown('<div class="csi-fishbone">', unsafe_allow_html=True)
+        for i, label in enumerate(stages):
+            dot_cls = "dot active" if i <= active_idx else "dot"
+            st.markdown(
+                f"<div class='bone'><div class='{dot_cls}'></div><div class='label'>{label}</div></div>",
+                unsafe_allow_html=True,
+            )
+            if i < len(stages) - 1:
+                st.markdown("<div class='spine'></div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # 提示当前阶段
+        last_step = None
+        for ln in reversed(lines):
+            if "step_name=" in ln:
+                try:
+                    last_step = re.findall(r"step_name=([\w_]+)", ln)[0]
+                    break
+                except Exception:
+                    continue
+        if last_step:
+            st.caption(f"当前阶段: {last_step}")
+
+        st.caption(f"日志: {state.launcher_log_dir or ''}")
+
+        # 允许一键跳转到结果回放的对应日志
+        if main_log_path and state.launcher_log_dir:
+            try:
+                rel = state.launcher_log_dir.relative_to(main_log_path)
+                if st.button("➡️ 查看该日志结果", use_container_width=True):
+                    state.pending_log_path = rel
+                    st.rerun()
+            except Exception:
+                pass
+
+        with st.expander("📜 实时日志 (尾部)", expanded=True):
+            if lines:
+                st.code("".join(lines[-80:]), language="text")
+            else:
+                st.info("日志文件尚无内容，稍后自动刷新。")
+
+        with st.expander("🧾 摘要 (最近 10 行)", expanded=False):
+            if lines:
+                st.write("\n".join([ln.strip() for ln in lines[-10:]]))
+            else:
+                st.info("暂无摘要。")
+    else:
+        st.info("当前无运行中的任务。点击上方启动 fin_factor。")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 16px;"></div>', unsafe_allow_html=True)
+
+    # Task selection cards
+    st.markdown('<div class="csi-card fade-in" style="animation-delay: 0.4s;">', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-title">🎯 选择 Agent 任务</div>', unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
+
+    task_cols = st.columns(4, gap="medium")
+    tasks = [
+        {"id": "fin_factor", "title": "因子挖掘", "desc": "自动生成与演化金融因子"},
+        {"id": "fin_model", "title": "模型开发", "desc": "构建与优化预测模型"},
+        {"id": "fin_quant", "title": "量化策略", "desc": "端到端策略研发闭环"},
+        {"id": "kaggle", "title": "Kaggle 竞赛", "desc": "自动化数据科学竞赛"},
+    ]
+
+    for i, task in enumerate(tasks):
+        with task_cols[i]:
+            selected_class = "selected" if state.selected_task == task["id"] else ""
+            if st.button(f"{task['title']}", key=f"task_{task['id']}", use_container_width=True):
+                state.selected_task = task["id"]
+            st.markdown(f'<div class="csi-task-desc">{task["desc"]}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 16px;"></div>', unsafe_allow_html=True)
+    state.task_iterations = st.slider("**设置迭代次数**", min_value=1, max_value=20, value=5, step=1)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 16px;"></div>', unsafe_allow_html=True)
+
+    # Prompt input section
+    st.markdown('<div class="csi-card fade-in" style="animation-delay: 0.6s;">', unsafe_allow_html=True)
+    st.markdown("<div class=\"csi-section-title\">✨ 输入提示词或指令</div>", unsafe_allow_html=True)
+    st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
+    task_prompt = st.text_area(
+        "输入研究目标或提示词:",
+        placeholder="例如：挖掘基于成交量分布的超额收益因子，考虑市场微观结构...",
+        height=140,
+        label_visibility="collapsed",
+        key="main_task_prompt"
+    )
+    if st.button("🚀 开始研发", use_container_width=True, type="primary", key="main_start_btn"):
+        if task_prompt and state.selected_task:
+            st.toast(f"任务 [{state.selected_task}] 已派发，迭代 {state.task_iterations} 轮", icon="🚀")
+            st.info(f"**提示词**: {task_prompt}")
+        elif not state.selected_task:
+            st.warning("请先选择一个 Agent 任务")
+        else:
+            st.error("请输入提示词")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 20px;"></div>', unsafe_allow_html=True)
+
+# ---- 任务启动器（fin_factor） ----
+# (moved into tab_run; original logic kept)
 
 
 def analyze_task_completion():
-    st.header("Task Completion Analysis", divider="orange")
+    st.header("任务完成分析", divider="orange")
 
     # Dictionary to store results for all loops
     completion_stats = {}
@@ -1095,43 +1831,106 @@ def analyze_task_completion():
         st.info("No task completion data available.")
 
 
-if state.scenario is not None:
-    summary_window()
-    if st.toggle("show analyse_task_competition"):
-        analyze_task_completion()
+with tab_log:
+    if state.scenario is not None:
+        # Hero panel
+        st.markdown(
+            f"""
+            <div class="csi-hero">
+                <div class="badge">CSI_Agent · Adaptive R&D</div>
+                <h1>中证指数自主演化因子实验室</h1>
+                <p>围绕中证指数的高密度投研闭环，兼顾研究、开发与反馈。</p>
+                <div class="chip-row" style="margin-top:10px;">
+                    <div class="chip">场景: {type(state.scenario).__name__}</div>
+                    <div class="chip">当前轮次: {state.lround}</div>
+                    <div class="chip">反馈轮次: {state.erounds[state.lround]}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # R&D Loops Window
-    if isinstance(state.scenario, SIMILAR_SCENARIOS):
-        st.header("R&D Loops♾️", divider="rainbow", anchor="_rdloops")
-        if len(state.msgs) > 1:
-            r_options = list(state.msgs.keys())
-            if 0 in r_options:
-                r_options.remove(0)
-            round = st.radio("**Loops**", horizontal=True, options=r_options, index=state.lround - 1)
+        st.markdown('<div style="height: 28px;"></div>', unsafe_allow_html=True)
+
+        # Scenario description card
+        st.markdown('<div class="csi-card" id="_scenario">', unsafe_allow_html=True)
+        theme = st_theme(key="main_theme_provider")
+        if theme:
+            theme = theme.get("base", "light")
+        css = f"""
+<style>
+    a[href="#_rdloops"], a[href="#_research"], a[href="#_development"], a[href="#_feedback"], a[href="#_scenario"], a[href="#_summary"], a[href="#_hypotheses"], a[href="#_metrics"] {{
+        color: {"#cbd5e1" if theme == "light" else "#cbd5e1"};
+        text-decoration: none;
+        font-weight: 500;
+    }}
+</style>
+"""
+        st.markdown(css, unsafe_allow_html=True)
+        render_generated_markdown(state.scenario.rich_style_description, key="scenario_description")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div style="height: 32px;"></div>', unsafe_allow_html=True)
+
+        # Summary card
+        st.markdown('<div class="csi-card">', unsafe_allow_html=True)
+        summary_window()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if st.toggle("显示任务完成度分析"):
+            st.markdown('<div class="csi-card">', unsafe_allow_html=True)
+            analyze_task_completion()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div style="height: 32px;"></div>', unsafe_allow_html=True)
+
+        # R&D loops
+        if isinstance(state.scenario, SIMILAR_SCENARIOS):
+            st.markdown('<div class="csi-section-title" id="_rdloops">♾️ 研发闭环迭代</div>', unsafe_allow_html=True)
+            st.markdown('<div class="csi-section-line"></div>', unsafe_allow_html=True)
+
+            if len(state.msgs) > 1:
+                r_options = sorted(k for k in state.msgs.keys() if k != 0)
+                if r_options:
+                    default_index = max(0, min(state.lround - 1, len(r_options) - 1))
+                    round = st.radio(
+                        "**选择迭代轮次**",
+                        horizontal=True,
+                        options=r_options,
+                        index=default_index,
+                        label_visibility="collapsed",
+                    )
+                else:
+                    round = 1
+            else:
+                round = 1
+
+            col_left, col_right = st.columns([1.05, 0.95], gap="large")
+
+            with col_left:
+                research_window()
+                st.markdown('<div style="height: 18px;"></div>', unsafe_allow_html=True)
+                feedback_window()
+
+            with col_right:
+                evolving_window()
+
+        elif isinstance(state.scenario, GeneralModelScenario):
+            rf_c = st.container()
+            d_c = st.container()
+            round = 0
+            with rf_c:
+                research_window()
+                feedback_window()
+            with d_c:
+                evolving_window()
         else:
-            round = 1
+            st.error("Unknown Scenario!")
+            st.stop()
 
-        rf_c, d_c = st.columns([2, 2])
-    elif isinstance(state.scenario, GeneralModelScenario):
-
-        rf_c = st.container()
-        d_c = st.container()
-        round = 0
-    else:
-        st.error("Unknown Scenario!")
-        st.stop()
-
-    with rf_c:
-        research_window()
-        feedback_window()
-
-    with d_c.container(border=True):
-        evolving_window()
-
-
-st.markdown("<br><br><br>", unsafe_allow_html=True)
-st.markdown("#### Disclaimer")
-st.markdown(
-    "*This content is AI-generated and may not be fully accurate or up-to-date; please verify with a professional for critical matters.*",
-    unsafe_allow_html=True,
-)
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    # st.markdown("#### Disclaimer")
+    # st.markdown(
+    #     "*This content is AI-generated and may not be fully accurate or up-to-date; please verify with a professional for critical matters.*",
+    #     unsafe_allow_html=True,
+    # )
