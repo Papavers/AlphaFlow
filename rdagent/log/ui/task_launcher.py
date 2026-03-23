@@ -168,8 +168,18 @@ def _save_uploaded_reports(log_dir: Path, uploaded_reports: list[Any] | None) ->
     for file in uploaded_reports:
         if file is None:
             continue
-        target = report_dir / Path(file.name).name
-        target.write_bytes(file.getvalue())
+        if isinstance(file, dict):
+            file_name = file.get("name")
+            file_bytes = file.get("content")
+        else:
+            file_name = getattr(file, "name", None)
+            file_bytes = file.getvalue() if hasattr(file, "getvalue") else None
+
+        if not file_name or file_bytes is None:
+            continue
+
+        target = report_dir / Path(file_name).name
+        target.write_bytes(file_bytes)
         saved_files.append(str(target))
     return report_dir, saved_files
 

@@ -1,8 +1,10 @@
 import streamlit as st
 from pathlib import Path
 import time
+import re
 import pandas as pd
 import plotly.express as px
+import fitz
 from rdagent.log.ui.utils_logscan import scan_logs, list_log_dirs, TaskRecord
 from rdagent.log.ui.results_parser import summarize_log_dir
 from rdagent.log.ui.page_style import apply_shared_page_style, render_app_sidebar, render_page_hero, render_section_intro
@@ -98,6 +100,53 @@ def _get_active_task_state() -> dict:
             "created_at": None,
         },
     )
+
+
+def _get_report_draft_store() -> dict:
+    return st.session_state.setdefault("home_report_drafts", {})
+
+
+def _normalize_uploaded_reports(uploaded_reports) -> list[dict]:
+    normalized = []
+    for uploaded_file in uploaded_reports or []:
+        file_bytes = uploaded_file.getvalue()
+        if not file_bytes:
+            continue
+        normalized.append(
+            {
+                "name": uploaded_file.name,
+                "content": file_bytes,
+                "size": len(file_bytes),
+            }
+        )
+    return normalized
+
+
+def _load_saved_report_items(report_files: list[str] | None) -> list[dict]:
+    items: list[dict] = []
+    for file_path in report_files or []:
+        path = Path(file_path)
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            content = path.read_bytes()
+        except Exception:
+            continue
+        items.append({"name": path.name, "content": content, "size": len(content), "saved_path": str(path)})
+    return items
+
+
+def _sync_report_draft(task_id: str, uploaded_reports) -> list[dict]:
+    draft_store = _get_report_draft_store()
+    if uploaded_reports:
+        draft_store[task_id] = _normalize_uploaded_reports(uploaded_reports)
+    return draft_store.get(task_id, [])
+
+
+def _clear_report_draft(task_id: str) -> None:
+    draft_store = _get_report_draft_store()
+    draft_store.pop(task_id, None)
+    st.session_state.pop("home_report_uploader", None)
 
 
 def _task_status_label(status: str | None) -> str:
@@ -205,6 +254,52 @@ def _render_prompt_history(tasks: list[TaskRecord], limit: int = 6) -> None:
             meta_col3.metric("报告数", len(meta.get("report_files") or []))
 
 
+@st.cache_data(show_spinner=False, ttl=600)
+def _pdf_preview(file_name: str, file_bytes: bytes) -> dict:
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page_count = doc.page_count
+    first_page = doc.load_page(0)
+    preview_text = first_page.get_text("text") or ""
+    preview_text = re.sub(r"\s+", " ", preview_text).strip()
+    preview_text = preview_text[:900]
+    pix = first_page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+    image_bytes = pix.tobytes("png")
+    return {
+        "file_name": file_name,
+        "page_count": page_count,
+        "preview_text": preview_text,
+        "image_bytes": image_bytes,
+    }
+
+
+def _render_report_preview_panel(report_items: list[dict], *, panel_title: str = "报告小窗") -> None:
+    if not report_items:
+        return
+    render_section_intro(panel_title, "刷新页面后仍会保留本次会话里上传过的报告预览。")
+    selected_name = st.selectbox(
+        "选择报告",
+        [item["name"] for item in report_items],
+        key=f"report_preview_select_{panel_title}",
+        label_visibility="collapsed",
+    )
+    selected_item = next((item for item in report_items if item["name"] == selected_name), report_items[0])
+    try:
+        preview = _pdf_preview(selected_item["name"], selected_item["content"])
+    except Exception as err:
+        st.warning(f"{selected_item['name']} 预览失败：{err}")
+        return
+
+    meta_col1, meta_col2 = st.columns(2)
+    meta_col1.metric("页数", preview["page_count"])
+    meta_col2.metric("文件大小", f"{selected_item.get('size', len(selected_item['content'])) / 1024 / 1024:.1f} MB")
+    st.image(preview["image_bytes"], caption=f"{selected_item['name']} 首页预览", use_container_width=True)
+    if preview["preview_text"]:
+        st.caption("首页文本摘录")
+        st.write(preview["preview_text"])
+    else:
+        st.caption("首页未提取到可读文本，可能是扫描版 PDF。")
+
+
 @st.cache_data(show_spinner=False, ttl=300)
 def _build_compare_rows(log_root_str: str, limit: int = 60) -> pd.DataFrame:
     log_root = Path(log_root_str)
@@ -282,6 +377,7 @@ selected_task = st.selectbox(
 )
 selected_spec = TASK_SPECS[selected_task]
 prompt_key = f"prompt_{selected_task}"
+report_preview_items: list[dict] = []
 
 with workspace_col:
     st.caption(selected_spec["desc"])
@@ -313,12 +409,33 @@ if selected_spec.get("needs_reports"):
             help="用于‘因子从报告中读取’任务，将自动从 PDF 中抽取候选因子。",
             key="home_report_uploader",
         )
+        report_preview_items = _sync_report_draft(selected_task, uploaded_reports)
+        action_col1, action_col2 = st.columns([1, 1])
+        with action_col1:
+            if report_preview_items:
+                st.success(f"已缓存 {len(report_preview_items)} 份报告，刷新页面后仍可继续预览与启动。")
+        with action_col2:
+            if report_preview_items and st.button("清空报告缓存", use_container_width=True):
+                _clear_report_draft(selected_task)
+                st.toast("已清空当前任务的报告缓存", icon="🗑️")
+                st.rerun()
+
+if selected_spec.get("needs_reports"):
+    with status_col:
+        with st.container(border=True):
+            if not report_preview_items and active_task.get("report_files"):
+                report_preview_items = _load_saved_report_items(active_task.get("report_files"))
+            if report_preview_items:
+                _render_report_preview_panel(report_preview_items)
+            else:
+                render_section_intro("报告小窗", "上传 PDF 后，这里会固定显示报告预览，不需要每次重新上传。")
+                st.caption("当前还没有可预览的报告。")
 
 with workspace_col:
     launch_col1, launch_col2, launch_col3 = st.columns(3)
     with launch_col1:
         if st.button("🟢 启动任务", type="primary", use_container_width=True):
-            if selected_spec.get("needs_reports") and not uploaded_reports:
+            if selected_spec.get("needs_reports") and not report_preview_items:
                 st.warning("该任务需要先上传 PDF 报告。")
             else:
                 try:
@@ -328,7 +445,7 @@ with workspace_col:
                         prompt=prompt_text,
                         loop_n=loop_n,
                         all_duration=all_duration.strip() or None,
-                        uploaded_reports=uploaded_reports,
+                        uploaded_reports=report_preview_items,
                     )
                     st.session_state["home_active_task"] = task_info
                     st.toast(f"{selected_spec['title']} 已启动", icon="🚀")
