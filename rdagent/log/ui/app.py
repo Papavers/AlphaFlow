@@ -1107,15 +1107,15 @@ def research_window():
                 with cols[i % 3]:
                     st.image(img, use_container_width=True)
 
-        if hg := state.msgs[round]["hypothesis generation"]:
-            st.markdown("**假设💡**")
-            h: Hypothesis = hg[0].content
-            render_generated_markdown(
-                f"""
-- **假设**: {h.hypothesis}
-- **理由**: {h.reason}""",
-                key="hypothesis_generation",
-            )
+            # Hypothesis
+            if hg := state.msgs[round]["hypothesis generation"]:
+                st.markdown("**Hypothesis💡**")  # 🧠
+                h: Hypothesis = hg[0].content
+                st.markdown(
+                    f"""
+- **Hypothesis**: {h.hypothesis}
+- **Reason**: {h.reason}"""
+                )
 
         if eg := state.msgs[round]["experiment generation"]:
             tasks_window(eg[0].content)
@@ -1159,22 +1159,21 @@ def feedback_window():
             with st.expander("**配置⚙️**", expanded=False):
                 st.markdown(state.scenario.experiment_setting, unsafe_allow_html=True)
 
-        if fb := state.msgs[round]["feedback"]:
-            if fbr := state.msgs[round]["Quantitative Backtesting Chart"]:
-                st.markdown("**收益率📈**")
-                fig = report_figure(fbr[0].content)
-                st.plotly_chart(fig, use_container_width=True)
-            st.markdown("**假设反馈🔍**")
-            h: HypothesisFeedback = fb[0].content
-            render_generated_markdown(
-                f"""
-- **观察**: {h.observations}
-- **假设评估**: {h.hypothesis_evaluation}
-- **新假设**: {h.new_hypothesis}
-- **决策**: {h.decision}
-- **理由**: {h.reason}""",
-                key="hypothesis_feedback",
-            )
+            if fb := state.msgs[round]["feedback"]:
+                if fbr := state.msgs[round]["Quantitative Backtesting Chart"]:
+                    st.markdown("**Returns📈**")
+                    fig = report_figure(fbr[0].content)
+                    st.plotly_chart(fig)
+                st.markdown("**Hypothesis Feedback🔍**")
+                h: HypothesisFeedback = fb[0].content
+                st.markdown(
+                    f"""
+- **Observations**: {h.observations}
+- **Hypothesis Evaluation**: {h.hypothesis_evaluation}
+- **New Hypothesis**: {h.new_hypothesis}
+- **Decision**: {h.decision}
+- **Reason**: {h.reason}"""
+                )
 
         if isinstance(state.scenario, KGScenario):
             if fbe := state.msgs[round]["runner result"]:
