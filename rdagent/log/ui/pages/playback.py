@@ -188,7 +188,7 @@ st.set_page_config(page_title="Playback · AlphaFlow", page_icon="🎞️", layo
 apply_shared_page_style()
 
 if not st.session_state.get("auth_token"):
-    st.switch_page("login.py")
+    st.switch_page("pages/login.py")
 
 render_app_sidebar("pages/playback.py")
 
@@ -264,7 +264,7 @@ if selected:
             st.rerun()
     with action_col2:
         if st.button("🧭 打开原版工作台回放", use_container_width=True):
-            st.switch_page("legacy.py")
+            st.switch_page("pages/legacy.py")
 
     tab_overview, tab_research, tab_dev, tab_code, tab_result, tab_advanced = st.tabs(
         ["总览", "研究任务", "开发迭代", "代码", "结果反馈", "高级"]

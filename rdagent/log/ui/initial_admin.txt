@@ -1,0 +1,2 @@
+initial admin: admin@localhost
+password: aYt_B0dvLnilq6Oc

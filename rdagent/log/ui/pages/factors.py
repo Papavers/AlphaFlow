@@ -7,7 +7,7 @@ st.set_page_config(page_title="因子记录 · AlphaFlow", page_icon="🧬", lay
 apply_shared_page_style()
 
 if not st.session_state.get("auth_token"):
-    st.switch_page("login.py")
+    st.switch_page("pages/login.py")
 
 render_app_sidebar("pages/factors.py")
 
@@ -91,11 +91,11 @@ if selected:
     with col_a:
         if st.button("🧭 去工作台回放", use_container_width=True):
             st.session_state["pending_log_path"] = record.log_dir.relative_to(log_root) if log_root.exists() else record.log_dir
-            st.switch_page("legacy.py")
+            st.switch_page("pages/legacy.py")
     with col_b:
         if st.button("📜 打开回放页", use_container_width=True):
             st.session_state["pending_log_path"] = record.log_dir.relative_to(log_root) if log_root.exists() else record.log_dir
-            st.switch_page("playback.py")
+            st.switch_page("pages/playback.py")
 else:
     st.caption("请选择一个因子记录查看详情。")
 

@@ -1,0 +1,26 @@
+{
+  "users": {
+    "admin@localhost": {
+      "name": "Initial Admin",
+      "role": "admin",
+      "active": true,
+      "password": {
+        "salt": "HHjaOQ8xEFcRzMmqdzrhSA==",
+        "hash": "6eH6qEDWMzlxHNarwAgoJicaVpGngAaBeHATgRW43r4=",
+        "iter": 200000
+      },
+      "created_at": "2026-03-25T03:28:10.438441Z"
+    },
+    "2311889434@qq.com": {
+      "name": "shwsun",
+      "role": "user",
+      "active": true,
+      "password": {
+        "salt": "2sedSccZwVsNZcxDtWxLpQ==",
+        "hash": "0PlSlJT+QYQ+jLdeI3oFudI5z0WRC/gs70GVO0RlKW0=",
+        "iter": 200000
+      },
+      "created_at": "2026-03-25T08:16:17.214158Z"
+    }
+  }
+}

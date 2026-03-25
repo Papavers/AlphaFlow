@@ -326,7 +326,7 @@ st.set_page_config(page_title="首页 · AlphaFlow", page_icon="🏠", layout="w
 apply_shared_page_style()
 
 if not st.session_state.get("auth_token"):
-    st.switch_page("login.py")
+    st.switch_page("pages/login.py")
 
 render_app_sidebar("pages/home.py")
 
